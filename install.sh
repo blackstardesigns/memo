@@ -5,6 +5,9 @@
 #   One-liner (downloads a prebuilt binary — no Rust or compiler needed):
 #     curl -fsSL https://raw.githubusercontent.com/blackstardesigns/memo/main/install.sh | sh
 #
+#   To install the latest pre-release (rc / alpha / beta):
+#     curl -fsSL https://raw.githubusercontent.com/blackstardesigns/memo/main/install.sh | sh -s -- --pre
+#
 #   From a local clone (builds from source if no prebuilt is available):
 #     ./install.sh
 #
@@ -22,6 +25,15 @@ GITHUB_API="https://api.github.com/repos/${REPO}"
 # Set GITHUB_TOKEN to install from a private repo (e.g. while testing):
 #   GITHUB_TOKEN=ghp_... sh install.sh
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
+
+# ── argument parsing ──────────────────────────────────────────────────────────
+INSTALL_PRERELEASE=0
+for _arg in "$@"; do
+  case "$_arg" in
+    --pre) INSTALL_PRERELEASE=1 ;;
+    *) ;;
+  esac
+done
 
 # ── styling (auto-disabled when not a terminal, or when NO_COLOR is set) ───────
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
@@ -283,11 +295,40 @@ try_download_prebuilt() {
   command -v curl >/dev/null 2>&1 || { warn "curl not found — cannot download prebuilt binary"; return 1; }
 
   info "Checking for latest release..."
-  _rel="$(_curl -fsSL "${GITHUB_API}/releases/latest" 2>/dev/null)" || true
-  VERSION="$(printf '%s' "$_rel" | grep -o '"tag_name": *"[^"]*"' | grep -o 'v[0-9][^"]*')" || true
+  if [ "$INSTALL_PRERELEASE" = "1" ]; then
+    # /releases returns all releases including pre-releases, newest first.
+    _all="$(_curl -fsSL "${GITHUB_API}/releases" 2>/dev/null)" || true
+    if command -v python3 >/dev/null 2>&1; then
+      VERSION="$(printf '%s' "$_all" | python3 -c "
+import sys, json
+try:
+    releases = json.load(sys.stdin)
+    if releases:
+        print(releases[0].get('tag_name', ''))
+except Exception:
+    pass
+" 2>/dev/null)" || true
+      _rel="$(printf '%s' "$_all" | python3 -c "
+import sys, json
+try:
+    releases = json.load(sys.stdin)
+    if releases:
+        print(json.dumps(releases[0]))
+except Exception:
+    pass
+" 2>/dev/null)" || true
+    else
+      VERSION="$(printf '%s' "$_all" | grep -o '"tag_name": *"[^"]*"' | head -1 | grep -o 'v[0-9][^"]*')" || true
+      _rel="$_all"
+    fi
+  else
+    _rel="$(_curl -fsSL "${GITHUB_API}/releases/latest" 2>/dev/null)" || true
+    VERSION="$(printf '%s' "$_rel" | grep -o '"tag_name": *"[^"]*"' | grep -o 'v[0-9][^"]*')" || true
+  fi
 
   if [ -z "$VERSION" ]; then
     warn "Could not determine latest release version"
+    [ "$INSTALL_PRERELEASE" = "0" ] && warn "If you want a pre-release, re-run with:  sh install.sh --pre"
     return 1
   fi
 
