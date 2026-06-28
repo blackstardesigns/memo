@@ -1,0 +1,136 @@
+# Configuration for ai-note-taker (the `note` command).
+# This file is auto-created at first launch under:
+#   $XDG_CONFIG_HOME/ai-note-taker/config.toml   (default: ~/.config/ai-note-taker/config.toml)
+# Edit the values below, then relaunch `note`. Run `note config --path` to locate it.
+
+# Which local backend to auto-start: "mlx" (Apple MLX) or "ollama".
+# Both speak the same OpenAI-compatible API, so refinement works the same either
+# way — this only selects the server `note` launches (see auto_start_server).
+provider = "mlx"
+
+# OpenAI-compatible base URL of your local model server.
+# MLX:    http://localhost:8080/v1   (mlx_lm.server --port 8080)
+# Ollama: http://localhost:11434/v1  (ollama serve, default port 11434)
+# Start an MLX server with, e.g.:
+#   pip install mlx-lm
+#   mlx_lm.server --model mlx-community/Llama-3.1-8B-Instruct-4bit --port 8080
+base_url = "http://localhost:8080/v1"
+
+# Model name the server should use.
+# MLX:    an mlx-community repo, e.g. mlx-community/Llama-3.1-8B-Instruct-4bit
+# Ollama: a pulled model tag, e.g. llama3.1 (run `ollama pull llama3.1` first)
+model = "mlx-community/Llama-3.1-8B-Instruct-4bit"
+
+# API key. Usually empty for a local MLX or Ollama server.
+api_key = ""
+
+# Where notes are stored. Leave empty to use the platform default
+# ($XDG_DATA_HOME/ai-note-taker/notes, i.e. ~/.local/share/ai-note-taker/notes).
+# Supports a leading ~ for your home directory.
+data_dir = ""
+
+# Sampling controls used when refining a note.
+temperature = 0.3
+max_tokens = 600
+
+# How long (in seconds) to wait for the model to respond.
+request_timeout_secs = 120
+
+# Stop sequences. Bigger instruct models sometimes keep generating past the end
+# of their answer and leak chat-template markers like <|eot_id|> or
+# <|start_header_id|>assistant<|end_header_id|>. These sequences stop generation
+# and are also stripped from the output so they never reach your notes.
+stop = ["<|eot_id|>", "<|end_of_text|>", "<|start_header_id|>", "<|im_end|>"]
+
+# --- Local server management -----------------------------------------------
+# When true, `note` starts the server selected by `provider` for you on launch
+# (using `model` and the port from `base_url`) and shuts it down when you quit.
+# If a server is already listening on that port, `note` leaves it alone — so for
+# Ollama you can keep this on even when the Ollama app is already running.
+#   provider = "mlx"    -> python -m mlx_lm.server --model <model> --port <port>
+#   provider = "ollama" -> ollama serve  (bound to <port> via OLLAMA_HOST)
+auto_start_server = true
+
+# When false (default), the server starts at launch and stays resident until you
+# quit, so the model is always ready. Set this to true to instead start it lazily
+# on your first refine (Ctrl+R) and shut it back down once it has been idle (see
+# server_idle_timeout_secs) — keeping the model out of memory until you actually
+# use refinement. Only applies when auto_start_server = true.
+server_on_demand = false
+
+# On-demand mode only (server_on_demand = true): how long, in seconds, to keep the
+# server running after your last refine before shutting it down. 0 stops it
+# immediately after each refine; a larger value keeps the model warm so repeated
+# refines don't pay the reload cost.
+server_idle_timeout_secs = 120
+
+# The settings below only apply when provider = "mlx".
+# Where to launch the server from. Point this at your local mlx-lm checkout if
+# you run from source; leave empty to launch from the current directory.
+mlx_repo = ""
+
+# Virtualenv to run the server with. Either an absolute path / "~/path", or a
+# name relative to mlx_repo (e.g. ".venv"). Empty => use `python3` from PATH.
+venv = ""
+
+# Show the keyboard-shortcuts hint bar along the bottom of the screen.
+show_shortcuts = true
+
+# --- Speech-to-text dictation (local, on-device) ---------------------------
+# In the editor, drive dictation with this key:
+#   hold it          -> push-to-talk: records while held, inserts on release
+#   double-press it  -> toggle continuous live listening (appends each phrase)
+# A function key like "F5" / "f6", or a combo like "ctrl+k" / "ctrl+g" / "ctrl+space".
+# IMPORTANT: this MUST stay a TOP-LEVEL key — keep it ABOVE the [theme] line, or
+# TOML treats it as part of [theme] and silently ignores it (so edits do nothing).
+# macOS note: F5 is the system Dictation key. If pressing it triggers macOS
+# dictation instead of this app, turn that off (System Settings > Keyboard >
+# Dictation), or enable "Use F1, F2, etc. keys as standard function keys", or pick
+# a combo like "ctrl+k". Hold-to-talk is crispest in terminals with the Kitty
+# keyboard protocol (Ghostty, kitty, WezTerm, iTerm2); elsewhere a key-repeat
+# heuristic is used.
+dictation_key = "F5"
+
+# Which whisper.cpp model to use. The matching ggml-<model>.bin is downloaded on
+# first use into ~/.local/share/ai-note-taker/models/. Options include:
+#   tiny.en | base.en | small.en | medium.en | large-v3   (drop ".en" for multilingual)
+# Bigger = more accurate but slower and larger.
+dictation_model = "base.en"
+
+# Explicit path to a GGML model file. Leave empty to use the managed cache above.
+# Supports a leading ~ for your home directory.
+dictation_model_path = ""
+
+# Spoken-language hint. Use a code like "en", or "auto" to let whisper detect it.
+dictation_language = "en"
+
+# Live listening: how much trailing silence (milliseconds) ends a phrase and
+# triggers its transcription.
+dictation_silence_ms = 700
+
+# The single prompt used when you press Ctrl+R to refine a note.
+refine_prompt = """
+You are a careful note editor. Improve the user's raw note: fix grammar and
+spelling, improve clarity and flow, and organise the content using Markdown
+headings (#, ##) and bullet points (-) where helpful. Preserve all facts and
+meaning, and do not invent information. Return ONLY the improved Markdown note,
+with no preamble or commentary.
+"""
+
+# UI colors and spacing. Colors accept names (e.g. "yellow", "darkgray",
+# "lightblue"), "#rrggbb" hex (e.g. "#ff8800"), a 0-255 palette index, or
+# "none"/"transparent" to use the terminal's default color.
+[theme]
+accent = "yellow"      # selection highlight, search focus, accents
+border = "#313244"     # default (unselected) borders
+refined = "#313244"    # refined-view accents and the ✦ marker
+star = "#313244"       # color of the ✦ marker on refined notes
+title_fg = "yellow"    # editor title-bar text
+title_bg = "none"      # editor title-bar background
+footer_fg = "#313244"  # footer hint-bar text
+footer_bg = "none"     # footer hint-bar background
+status = "green"       # transient status messages
+padding = 2            # inner padding (cells) for the editor body and tiles
+divider = "#313244"    # horizontal line separating the note header from content
+rounded_tiles = true   # rounded corners on note tiles in the list view
+meta = "#585b70"       # created/modified timestamps on tiles and in the editor

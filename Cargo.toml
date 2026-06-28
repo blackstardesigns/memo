@@ -1,0 +1,41 @@
+[package]
+name = "memo"
+version = "0.1.1"
+edition = "2021"
+description = "Terminal AI note-taker that refines notes with a local MLX LLM"
+license = "MIT"
+
+[[bin]]
+name = "memo"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+tui-textarea = "0.7"
+ureq = { version = "2", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+dirs = "5"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+# Local speech-to-text dictation: cpal captures the microphone, whisper-rs runs
+# whisper.cpp in-process. The Metal GPU backend is enabled on macOS only (see
+# below); on other platforms whisper.cpp falls back to CPU.
+cpal = "0.18"
+whisper-rs = "0.16"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Metal acceleration is Apple-only. Cross-platform builders get the CPU backend
+# automatically — no Cargo.toml edits needed.
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.16", features = ["metal"] }
+
+[profile.release]
+strip = true
