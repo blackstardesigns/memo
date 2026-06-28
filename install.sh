@@ -537,9 +537,11 @@ EOF
 radio_select() {
   _def="$1"; shift
   _n=$#
-  if ! is_interactive || ! command -v stty >/dev/null 2>&1; then
-    printf '%s' "$_def"; return 1
-  fi
+  # Gate on /dev/tty being a real terminal — not on [ -t 1 ], because we are
+  # usually called inside $(...) where stdout is a pipe. All of our I/O goes to
+  # /dev/tty, and `stty -g` succeeds only when it is an actual terminal.
+  command -v stty >/dev/null 2>&1 || { printf '%s' "$_def"; return 1; }
+  [ -e /dev/tty ] || { printf '%s' "$_def"; return 1; }
   _esc="$(printf '\033')"; _cr="$(printf '\r')"
   _saved="$(stty -g </dev/tty 2>/dev/null)" || { printf '%s' "$_def"; return 1; }
 
@@ -573,6 +575,7 @@ radio_select() {
       ''|"$_cr"|' ') break ;;                       # enter / space → confirm
       'k'|'K') _cur=$((_cur - 1)) ;;
       'j'|'J') _cur=$((_cur + 1)) ;;
+      'q'|'Q') _cur=0; break ;;                      # q → cancel
       "$_esc")
         # Read the rest of an escape sequence with a brief timeout so a lone
         # Esc keypress can't block the loop.
@@ -583,7 +586,8 @@ radio_select() {
         case "$_k2$_k3" in
           '[A'|'OA') _cur=$((_cur - 1)) ;;
           '[B'|'OB') _cur=$((_cur + 1)) ;;
-          *) : ;;                                    # lone Esc / unknown → ignore
+          '') _cur=0; break ;;                       # bare Esc → cancel
+          *) : ;;                                    # other escape seq → ignore
         esac
         ;;
       *) : ;;
@@ -600,6 +604,12 @@ radio_select() {
   return 0
 }
 
+setup_skip() {
+  info "Skipping local LLM setup — no server was installed or configured."
+  info "memo still captures and edits notes; AI refine (Ctrl+R) needs a server."
+  info "Set one up anytime by running:  ${BOLD}memo --setup${RESET}"
+}
+
 setup_backend() {
   # Build plain-text option labels (the selector adds the highlight styling).
   _mlx_label="mlx-lm    on-device, Apple Silicon"
@@ -608,26 +618,29 @@ setup_backend() {
   [ "$OS" = "Darwin" ] && python3 -c "import mlx_lm" 2>/dev/null && _mlx_label="$_mlx_label   ✔ installed"
   _oll_label="Ollama    cross-platform: Intel, Linux, Windows"
   command -v ollama >/dev/null 2>&1 && _oll_label="$_oll_label   ✔ installed"
+  _skip_label="Skip — don't set up a server now"
 
   # Default: mlx on macOS (Apple Silicon), Ollama everywhere else.
   if [ "$OS" = "Darwin" ]; then _default="1"; else _default="2"; fi
 
   printf '\n'
   info "Choose a ${BOLD}local LLM server${RESET} for AI refinement:"
-  is_interactive && info "${DIM}↑/↓ to move · space or enter to select${RESET}"
+  is_interactive && info "${DIM}↑/↓ move · space/enter select · esc cancel${RESET}"
   printf '\n'
 
-  if _choice="$(radio_select "$_default" "$_mlx_label" "$_oll_label")"; then
+  if _choice="$(radio_select "$_default" "$_mlx_label" "$_oll_label" "$_skip_label")"; then
     : # selected via the radio UI
   else
     # No raw-input UI — show a numbered menu (interactive) or take the default.
     printf '     1) %s\n' "$_mlx_label"
     printf '     2) %s\n' "$_oll_label"
+    printf '     3) %s\n' "$_skip_label"
     if is_interactive; then
-      printf '   %sSelect backend [1/2]%s %s(default %s)%s ' "$BOLD" "$RESET" "$DIM" "$_default" "$RESET"
+      printf '   %sSelect backend [1/2/3]%s %s(default %s)%s ' "$BOLD" "$RESET" "$DIM" "$_default" "$RESET"
       case "$(read_tty)" in
         1) _choice="1" ;;
         2) _choice="2" ;;
+        3) _choice="3" ;;
         *) _choice="$_default" ;;
       esac
     else
@@ -636,7 +649,12 @@ setup_backend() {
   fi
   printf '\n'
 
-  if [ "$_choice" = "1" ]; then setup_mlx; else setup_ollama; fi
+  case "$_choice" in
+    1) setup_mlx ;;
+    2) setup_ollama ;;
+    0) info "Setup cancelled."; setup_skip ;;
+    *) setup_skip ;;
+  esac
 }
 
 setup_backend

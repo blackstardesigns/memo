@@ -383,7 +383,7 @@ pub fn key_matches(code: KeyCode, mods: KeyModifiers, binding: &(KeyCode, KeyMod
 }
 
 /// Documented default written to disk on first run. Kept in sync with `config.example.toml`.
-const DEFAULT_CONFIG_TOML: &str = r##"# Configuration for memo (the `memo` command).
+pub(crate) const DEFAULT_CONFIG_TOML: &str = r##"# Configuration for memo (the `memo` command).
 # Edit the values below, then relaunch `memo`. Run `memo config --path` to locate this file.
 
 # Which local backend to auto-start: "mlx" (Apple MLX) or "ollama".

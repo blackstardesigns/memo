@@ -23,6 +23,7 @@ mod llm;
 mod note;
 mod search;
 mod server;
+mod setup;
 mod storage;
 #[cfg(test)]
 mod testutil;
@@ -40,6 +41,9 @@ use storage::Store;
     about = "Terminal AI note-taker that refines notes with a local LLM (MLX or Ollama)"
 )]
 struct Cli {
+    /// Re-run the local LLM server setup (choose MLX or Ollama) and update the config.
+    #[arg(long)]
+    setup: bool,
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -59,6 +63,9 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.setup {
+        return setup::run();
+    }
     match cli.command {
         Some(Commands::Config { path, edit }) => run_config(path, edit),
         None => run_tui(),

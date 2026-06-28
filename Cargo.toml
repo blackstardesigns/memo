@@ -1,6 +1,8 @@
 [package]
 name = "memo"
-version = "0.1.1"
+
+version = "0.1.0-rc1"
+
 edition = "2021"
 description = "Terminal AI note-taker that refines notes with a local MLX LLM"
 license = "MIT"
