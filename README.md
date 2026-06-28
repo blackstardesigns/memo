@@ -1,6 +1,6 @@
 <div align="center">
 
-# memo
+![memo banner](banner.png)
 
 **Fast, keyboard-first notes for your terminal — refined by local AI.**
 
