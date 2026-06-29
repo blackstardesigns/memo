@@ -7,7 +7,7 @@
 
 No cloud. No account. No subscription. Your notes stay on your machine.
 
-![GitHub release](https://img.shields.io/github/v/release/blackstardesigns/memo?include_prereleases)
+![release](https://img.shields.io/github/v/release/blackstardesigns/memo?include_prereleases&sort=semver&label=release)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 ![Local AI](https://img.shields.io/badge/AI-local%20only-green)
