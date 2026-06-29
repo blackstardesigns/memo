@@ -160,6 +160,9 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+      - name: Checkout source (for release notes)
+        uses: actions/checkout@v5
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -172,11 +175,34 @@ jobs:
           sha256sum memo-*.tar.gz memo-*.zip > "memo-${{ github.ref_name }}-SHA256SUMS.txt"
           cat "memo-${{ github.ref_name }}-SHA256SUMS.txt"
 
-      - name: Create GitHub Release
+      - name: Locate release notes
+        id: notes
+        run: |
+          FILE=".release-notes/${{ github.ref_name }}.md"
+          if [ -f "$FILE" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "path=$FILE" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release (handwritten notes)
+        if: steps.notes.outputs.found == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: ${{ steps.notes.outputs.path }}
+          # Tags like v0.1.0-rc1 (containing a hyphen) are marked pre-release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            artifacts/memo-*.tar.gz
+            artifacts/memo-*.zip
+            artifacts/memo-${{ github.ref_name }}-SHA256SUMS.txt
+
+      - name: Create GitHub Release (auto-generated notes)
+        if: steps.notes.outputs.found != 'true'
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          # Tags like v0.1.0-rc1 (containing a hyphen) are marked pre-release.
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             artifacts/memo-*.tar.gz

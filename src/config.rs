@@ -111,8 +111,6 @@ pub struct Theme {
     pub border: String,
     /// Refined-view accents (borders, etc.).
     pub refined: String,
-    /// Color of the ✦ marker shown for refined notes.
-    pub star: String,
     /// Editor title-bar foreground / background.
     pub title_fg: String,
     pub title_bg: String,
@@ -137,7 +135,6 @@ impl Default for Theme {
             accent: "yellow".into(),
             border: "#313244".into(),
             refined: "#313244".into(),
-            star: "#313244".into(),
             title_fg: "yellow".into(),
             title_bg: "none".into(),
             footer_fg: "#313244".into(),
@@ -506,7 +503,6 @@ with no preamble or commentary.
 accent = "yellow"      # selection highlight, search focus, accents
 border = "#313244"     # default (unselected) borders
 refined = "#313244"    # refined-view accents and the ✦ marker
-star = "#313244"       # color of the ✦ marker on refined notes
 title_fg = "yellow"    # editor title-bar text
 title_bg = "none"      # editor title-bar background
 footer_fg = "#313244"  # footer hint-bar text

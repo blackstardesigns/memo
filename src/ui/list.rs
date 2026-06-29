@@ -257,7 +257,7 @@ fn draw_tile(f: &mut Frame, theme: &ResolvedTheme, note: &Note, area: Rect, sele
         title_style,
     )];
     if refined {
-        title_spans.push(Span::styled(" ✦", Style::default().fg(theme.star)));
+        title_spans.push(Span::styled(" ✦", Style::default().fg(Color::Rgb(127, 0, 255))));
     }
 
     let (p1, p2) = match preview.as_slice() {
@@ -382,13 +382,13 @@ fn draw_folder_tile(
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let text = if matches!(app.focus, Focus::Drawer) {
-        " ↑↓ move · →← expand · ↵ open · Tab tiles · h/Esc close "
+        " ↑↓ move · →← expand · ↵ open · Tab tiles · d/Esc close "
     } else if matches!(app.focus, Focus::Search) {
         " type to filter · ↑↓ move · Enter open · Esc or / dismiss "
     } else if app.current_folder.is_some() {
-        " n new · m move · ↵ open · h drawer · Esc back · ? help "
+        " n new · x delete · m move · ^H help "
     } else {
-        " n new · ^F folder · m move · ↵ open · h drawer · ? help · q quit "
+        " n new · ^F folder · x delete · m move · ^H help "
     };
     let hint = app.cfg.show_shortcuts.then_some(text);
 
@@ -406,7 +406,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 " ✦ ",
                 Style::default()
-                    .fg(app.theme.star)
+                    .fg(Color::Rgb(127, 0, 255))
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(

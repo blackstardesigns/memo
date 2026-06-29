@@ -47,7 +47,9 @@ const MAX_SEGMENT_SAMPLES: usize = TARGET_RATE as usize * 20;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DictationStatus {
     Idle,
-    /// Loading (and possibly downloading) the speech model.
+    /// Downloading the speech model for the first time (background prefetch).
+    Preparing,
+    /// Loading (already-downloaded) speech model from disk.
     Loading,
     /// Model loaded and ready; not currently recording.
     Ready,
@@ -314,11 +316,29 @@ impl Worker {
                 }
             }
             DictationCmd::Prefetch => {
-                // Background prefetch at startup: download the model if it isn't on
-                // disk yet, then load it — all silently. Best-effort, so a failure
-                // (e.g. no network) is swallowed here and only surfaces if the user
-                // later actually dictates.
-                self.ensure_transcriber(true);
+                if self.transcriber.is_some() {
+                    return;
+                }
+                // Check before the blocking factory call so we can emit the right
+                // status. When the model is absent, emit Preparing (visible spinner
+                // in the editor footer) so the user knows a download is in progress.
+                // Use silent=true so ensure_transcriber doesn't also send Loading.
+                let needs_download = self.model_path.as_ref().map_or(true, |p| !p.exists());
+                if needs_download {
+                    self.send_status(DictationStatus::Preparing);
+                }
+                let ok = self.ensure_transcriber(true);
+                if needs_download {
+                    if ok {
+                        // Fires the "Dictation ready" flash in the UI (same path as
+                        // Loading → Ready after a user-triggered load).
+                        self.send_status(DictationStatus::Ready);
+                    } else {
+                        // Download or load failed silently; back to Idle so the
+                        // next explicit dictation attempt surfaces the real error.
+                        self.send_status(DictationStatus::Idle);
+                    }
+                }
             }
             DictationCmd::Warmup => {
                 // Preload only if the model is already downloaded — never trigger a

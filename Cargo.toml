@@ -1,7 +1,7 @@
 [package]
 name = "memo"
 
-version = "0.1.0-rc1"
+version = "0.1.0-rc2"
 
 edition = "2021"
 description = "Terminal AI note-taker that refines notes with a local MLX LLM"
@@ -25,6 +25,8 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+# Compare the running version against the latest GitHub Release (`memo update`).
+semver = "1"
 # Local speech-to-text dictation: cpal captures the microphone, whisper-rs runs
 # whisper.cpp in-process. The Metal GPU backend is enabled on macOS only (see
 # below); on other platforms whisper.cpp falls back to CPU.

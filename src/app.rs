@@ -520,7 +520,13 @@ impl App {
         // threshold; synthesize a release when auto-repeats stop in fallback mode).
         let action = self.gesture.on_tick(Instant::now());
         self.apply_gesture(action);
-        if self.refine_status == RefineStatus::Refining || self.dictation_active() {
+        if self.refine_status == RefineStatus::Refining
+            || self.dictation_active()
+            || matches!(
+                self.dictation_status,
+                DictationStatus::Preparing | DictationStatus::Loading
+            )
+        {
             self.spinner_frame = self.spinner_frame.wrapping_add(1);
         }
         // Auto-clear transient status message.
@@ -904,7 +910,7 @@ impl App {
         self.sync_active();
         let source = self.active_content();
         if source.trim().is_empty() {
-            self.set_status("Nothing to refine yet");
+            self.set_status("Add text to refine");
             return;
         }
         // On-demand mode: spin the server up now (no-op when it is already running
@@ -1132,26 +1138,28 @@ impl App {
     fn on_key_drawer(&mut self, key: KeyEvent) {
         let rows = self.drawer_rows();
         if rows.is_empty() {
-            if matches!(key.code, KeyCode::Esc | KeyCode::Char('h')) {
-                self.close_drawer();
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('d') => self.close_drawer(),
+                KeyCode::Tab => self.focus = Focus::Tiles,
+                // No tree to navigate — still run global list commands.
+                _ => self.on_key_tiles(key),
             }
             return;
         }
         let max = rows.len() - 1;
         self.drawer_selected = self.drawer_selected.min(max);
         match key.code {
-            // `h` is the toggle: in the drawer it always closes (Esc too).
-            KeyCode::Char('h') | KeyCode::Esc => self.close_drawer(),
+            // `d` is the toggle: in the drawer it always closes (Esc too).
+            KeyCode::Char('d') | KeyCode::Esc => self.close_drawer(),
             KeyCode::Tab => self.focus = Focus::Tiles, // keep the drawer open
-            KeyCode::Char('q') => self.modal = Modal::ConfirmQuit,
-            // Navigation is arrow-keys only.
-            KeyCode::Down => {
+            // Tree navigation: arrow keys or vim-style j/k/l.
+            KeyCode::Down | KeyCode::Char('j') => {
                 self.drawer_selected = (self.drawer_selected + 1).min(max);
             }
-            KeyCode::Up => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 self.drawer_selected = self.drawer_selected.saturating_sub(1);
             }
-            KeyCode::Right => {
+            KeyCode::Right | KeyCode::Char('l') => {
                 if let Some(DrawerRow::Folder {
                     index,
                     expanded: false,
@@ -1182,7 +1190,9 @@ impl App {
                 }
                 None => {}
             },
-            _ => {}
+            // Anything else runs the normal list command so global actions
+            // (new note, search, delete, export, quit, …) work with the drawer open.
+            _ => self.on_key_tiles(key),
         }
     }
 
@@ -1219,7 +1229,7 @@ impl App {
             self.selected_note().map(|n| n.meta.title.clone())
         };
         let Some(title) = title else {
-            self.set_status("Nothing to export");
+            self.set_status("No note to export");
             return;
         };
         let slug = crate::note::slugify(&title);
@@ -1280,6 +1290,53 @@ impl App {
         match self.screen {
             Screen::List => self.on_key_list(key),
             Screen::Editor => self.on_key_editor(key),
+        }
+    }
+
+    /// Insert text from a system-clipboard paste (delivered as one bracketed-paste
+    /// event). Routes to whatever currently accepts typed text: an open text-input
+    /// modal, the note editor, or the list search bar. Newlines are preserved in
+    /// the editor and flattened to spaces in single-line fields.
+    pub fn on_paste(&mut self, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        let one_line = || text.replace(['\r', '\n'], " ");
+        match &mut self.modal {
+            Modal::NewFolder(buf) | Modal::Export(buf) | Modal::CustomPrompt(buf) => {
+                buf.push_str(&one_line());
+                return;
+            }
+            Modal::SymbolPicker { query, sel } => {
+                query.push_str(one_line().trim());
+                *sel = 0;
+                return;
+            }
+            Modal::TitleEdit { buf, cursor } => {
+                let clean = one_line();
+                let byte_idx = char_to_byte(buf, *cursor);
+                buf.insert_str(byte_idx, &clean);
+                *cursor += clean.chars().count();
+                return;
+            }
+            Modal::None => {}
+            // Confirmation / help / move modals don't take typed text.
+            _ => return,
+        }
+
+        match self.screen {
+            Screen::Editor => {
+                if self.textarea.insert_str(&text) {
+                    self.dirty = true;
+                    self.last_edit = Some(Instant::now());
+                }
+            }
+            Screen::List => {
+                if matches!(self.focus, Focus::Search) {
+                    self.search_query.push_str(one_line().trim());
+                    self.rebuild_items();
+                }
+            }
         }
     }
 
@@ -1352,9 +1409,11 @@ impl App {
                     }
                 }
                 DictationMsg::Status(s) => {
-                    // Flash a transient "ready" exactly once, on Loading → Ready.
+                    // Flash a transient "ready" once, on Preparing/Loading → Ready.
                     match s {
-                        DictationStatus::Loading => self.dictation_loading = true,
+                        DictationStatus::Preparing | DictationStatus::Loading => {
+                            self.dictation_loading = true;
+                        }
                         DictationStatus::Ready if self.dictation_loading => {
                             self.dictation_loading = false;
                             self.set_status("🎤 Dictation ready");
@@ -1380,10 +1439,10 @@ impl App {
         }
     }
 
-    /// Spawn the dictation worker and prefetch the speech model at app startup:
-    /// download it if it isn't on disk yet, then load it — all on the worker
-    /// thread and silently, so the UI never blocks and shows no status. By the
-    /// time the user reaches the editor and dictates, the model is ready.
+    /// Spawn the dictation worker and prefetch the speech model at app startup.
+    /// If the model is missing, the worker downloads it and emits Preparing so
+    /// the editor footer shows a spinner. If already on disk it loads silently.
+    /// Either way the model is ready before the user's first dictation.
     pub fn prefetch_dictation(&mut self) {
         self.ensure_dictation();
         if let Some(tx) = &self.dictation_tx {
@@ -1476,49 +1535,60 @@ impl App {
                 }
                 _ => {}
             },
-            Focus::Tiles => match key.code {
-                KeyCode::Char('q') => self.modal = Modal::ConfirmQuit,
-                // Esc dismisses an active search first; otherwise it backs out of
-                // a folder, and at the top level it prompts to quit.
-                KeyCode::Esc => {
-                    if !self.search_query.is_empty() {
-                        self.exit_search();
-                    } else if self.current_folder.is_some() {
-                        self.leave_folder();
-                    } else {
-                        self.modal = Modal::ConfirmQuit;
-                    }
+            Focus::Tiles => self.on_key_tiles(key),
+        }
+    }
+
+    /// Command handling for the main tile grid. Factored out of `on_key_list` so
+    /// the drawer can delegate here: any key the drawer doesn't use for tree
+    /// navigation runs the normal list command, so actions like `n`, `/`, `d`,
+    /// and `x` keep working while the drawer is open.
+    fn on_key_tiles(&mut self, key: KeyEvent) {
+        if is_ctrl(&key, 'e') {
+            self.open_export_modal();
+            return;
+        }
+        if is_ctrl(&key, 'h') {
+            self.modal = Modal::Help;
+            return;
+        }
+        match key.code {
+            KeyCode::Char('q') => self.modal = Modal::ConfirmQuit,
+            // Esc dismisses an active search first; otherwise it backs out of
+            // a folder, and at the top level it prompts to quit.
+            KeyCode::Esc => {
+                if !self.search_query.is_empty() {
+                    self.exit_search();
+                } else if self.current_folder.is_some() {
+                    self.leave_folder();
+                } else {
+                    self.modal = Modal::ConfirmQuit;
                 }
-                // h toggles the notes/folders drawer (and focuses it).
-                KeyCode::Char('h') => self.toggle_drawer(),
-                // Tab moves into an already-open drawer without closing it.
-                KeyCode::Tab if self.drawer_open => self.focus = Focus::Drawer,
-                KeyCode::Char('n') => self.new_note(),
-                KeyCode::Char('o') | KeyCode::Enter => self.open_or_enter(),
-                KeyCode::Char('m') => self.open_move_modal(),
-                KeyCode::Char('/') => self.focus = Focus::Search,
-                KeyCode::Char('\\') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    self.modal = Modal::Help;
+            }
+            // d toggles the notes/folders drawer (and focuses it).
+            KeyCode::Char('d') => self.toggle_drawer(),
+            // Tab moves into an already-open drawer without closing it.
+            KeyCode::Tab if self.drawer_open => self.focus = Focus::Drawer,
+            KeyCode::Char('n') => self.new_note(),
+            KeyCode::Char('o') | KeyCode::Enter => self.open_or_enter(),
+            KeyCode::Char('m') => self.open_move_modal(),
+            KeyCode::Char('/') => self.focus = Focus::Search,
+            KeyCode::Char('x') => {
+                if self.selected_note().is_some() {
+                    self.modal = Modal::ConfirmDelete;
+                } else if let Some(folder) = self.selected_folder() {
+                    self.modal = Modal::ConfirmDeleteFolder(folder.id.clone());
                 }
-                KeyCode::Char('d') => {
-                    if self.selected_note().is_some() {
-                        self.modal = Modal::ConfirmDelete;
-                    } else if let Some(folder) = self.selected_folder() {
-                        self.modal = Modal::ConfirmDeleteFolder(folder.id.clone());
-                    }
-                }
-                KeyCode::Char('x') => self.open_export_modal(),
-                KeyCode::Char('j') | KeyCode::Down => {
-                    self.move_selection(self.list_columns as isize)
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    self.move_selection(-(self.list_columns as isize))
-                }
-                // `h` now toggles the drawer (above); left movement is the arrow key.
-                KeyCode::Left => self.move_selection(-1),
-                KeyCode::Char('l') | KeyCode::Right => self.move_selection(1),
-                _ => {}
-            },
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.move_selection(self.list_columns as isize)
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.move_selection(-(self.list_columns as isize))
+            }
+            KeyCode::Left => self.move_selection(-1),
+            KeyCode::Char('l') | KeyCode::Right => self.move_selection(1),
+            _ => {}
         }
     }
 
@@ -1574,23 +1644,23 @@ impl App {
             self.modal = Modal::TitleEdit { buf: title, cursor };
             return;
         }
-        if is_ctrl(&key, 'x') {
+        if is_ctrl(&key, 'e') {
             self.open_export_modal();
             return;
         }
-        if is_ctrl(&key, 'e') {
+        if is_ctrl(&key, 'm') {
             self.modal = Modal::SymbolPicker {
                 query: String::new(),
                 sel: 0,
             };
             return;
         }
-        if key.code == KeyCode::Tab {
-            self.toggle_view();
+        if is_ctrl(&key, 'h') {
+            self.modal = Modal::Help;
             return;
         }
-        if key.code == KeyCode::Char('\\') && key.modifiers.contains(KeyModifiers::ALT) {
-            self.modal = Modal::Help;
+        if key.code == KeyCode::Tab {
+            self.toggle_view();
             return;
         }
 
@@ -1864,6 +1934,11 @@ struct GestureState {
     consumed: bool,
     /// Kitty mode: down-edge of the previous press, for double-press detection.
     prev_press: Option<Instant>,
+    /// Kitty mode: at least one Repeat event has arrived during this key-down.
+    /// A terminal that reports releases also reports repeats while a key is held,
+    /// so once repeats have been seen their absence means the key is no longer
+    /// held — used to recover if the Release event itself is dropped.
+    seen_repeat: bool,
     /// Fallback: an isolated press awaiting a possible second (double) press.
     pending_tap: Option<Instant>,
     /// Fallback: a candidate second tap, toggled to live once [`TAP_CONFIRM`]
@@ -1883,6 +1958,7 @@ impl GestureState {
             ptt: false,
             consumed: false,
             prev_press: None,
+            seen_repeat: false,
             pending_tap: None,
             double_candidate: None,
         }
@@ -1911,6 +1987,7 @@ impl GestureState {
         self.ptt = false;
         self.consumed = false;
         self.prev_press = None;
+        self.seen_repeat = false;
         self.pending_tap = None;
         self.double_candidate = None;
     }
@@ -1931,6 +2008,7 @@ impl GestureState {
             // Repeat/Release events only occur under the Kitty protocol.
             KeyEventKind::Repeat => {
                 self.last_signal = Some(now);
+                self.seen_repeat = true;
                 None
             }
             KeyEventKind::Release => self.on_release_kitty(now),
@@ -1970,9 +2048,21 @@ impl GestureState {
     fn on_press_kitty(&mut self, now: Instant) -> Option<GestureAction> {
         self.last_signal = Some(now);
         if self.down {
-            // A held key sends Repeat events, not Press; ignore stray repeats.
-            return None;
+            // A held key streams Repeat events, not Press, so a fresh Press while
+            // we still think the key is down means the previous Release was dropped
+            // (a terminal multiplexer like tmux/screen often doesn't forward
+            // key-up). When the prior press was a quick tap that never auto-repeated
+            // (`!seen_repeat`) and isn't an active hold (`!ptt`), recover from the
+            // missed release and read this as a fresh press — otherwise the second
+            // tap of a double-press is swallowed and live can never be toggled (and
+            // the lone first tap is misread as a stuck push-to-talk). An actively
+            // held push-to-talk is left to the repeat-gap safety net in `on_tick`.
+            if self.ptt || self.seen_repeat {
+                return None;
+            }
+            self.down = false;
         }
+        self.seen_repeat = false; // fresh key-down episode
         // A second press soon after the previous one is a double-press.
         if let Some(prev) = self.prev_press {
             if now.duration_since(prev) <= DOUBLE_PRESS_WINDOW {
@@ -2017,6 +2107,27 @@ impl GestureState {
             self.ptt = true;
             self.prev_press = None;
             return Some(GestureAction::StartPushToTalk);
+        }
+        // Safety net: while push-to-talk is held, the terminal streams Repeat
+        // events. Once they stop arriving the key has been let go — normally the
+        // Release event ends the hold, but if that release is swallowed (e.g.
+        // macOS intercepts the F5 key-up for its own Dictation), the hold would
+        // otherwise stay stuck recording forever. Infer the release from the
+        // repeat gap, but only after at least one repeat (so a held key whose
+        // first auto-repeat hasn't landed yet isn't cut off prematurely).
+        if self.ptt
+            && self.seen_repeat
+            && self
+                .last_signal
+                .is_some_and(|t| now.duration_since(t) >= REPEAT_TIMEOUT)
+        {
+            self.down = false;
+            self.down_since = None;
+            self.ptt = false;
+            self.consumed = false;
+            self.prev_press = None;
+            self.seen_repeat = false;
+            return Some(GestureAction::StopPushToTalk);
         }
         None
     }
@@ -2110,6 +2221,91 @@ mod gesture_tests {
         assert_eq!(
             g.on_key(KeyEventKind::Release, t0 + Duration::from_millis(500)),
             Some(GestureAction::StopPushToTalk)
+        );
+    }
+
+    #[test]
+    fn dropped_release_recovers_via_repeat_gap() {
+        // Kitty mode, push-to-talk held. The terminal streams repeats, then the
+        // key is released but its Release event is swallowed (macOS eating the
+        // F5 key-up for system Dictation). The repeat gap must end the hold so
+        // dictation can't get stuck recording forever.
+        let mut g = GestureState::new(binding(), true);
+        let t0 = Instant::now();
+        g.on_key(KeyEventKind::Press, t0);
+        assert_eq!(
+            g.on_tick(t0 + Duration::from_millis(300)),
+            Some(GestureAction::StartPushToTalk)
+        );
+        // Auto-repeats arrive while the key is held.
+        g.on_key(KeyEventKind::Repeat, t0 + Duration::from_millis(350));
+        g.on_key(KeyEventKind::Repeat, t0 + Duration::from_millis(400));
+        // No Release event ever comes. Before the timeout, nothing happens...
+        assert_eq!(g.on_tick(t0 + Duration::from_millis(700)), None);
+        // ...but once repeats have been silent past the timeout, recover.
+        assert_eq!(
+            g.on_tick(t0 + Duration::from_millis(900)),
+            Some(GestureAction::StopPushToTalk)
+        );
+        // Idempotent: already stopped, no second stop.
+        assert_eq!(g.on_tick(t0 + Duration::from_millis(1000)), None);
+    }
+
+    #[test]
+    fn held_key_not_cut_off_before_first_repeat() {
+        // The first auto-repeat can lag the press by the OS repeat delay; until a
+        // repeat is actually seen, the safety net must not fire and end the hold.
+        let mut g = GestureState::new(binding(), true);
+        let t0 = Instant::now();
+        g.on_key(KeyEventKind::Press, t0);
+        assert_eq!(
+            g.on_tick(t0 + Duration::from_millis(300)),
+            Some(GestureAction::StartPushToTalk)
+        );
+        // Well past REPEAT_TIMEOUT, but no repeat has landed yet → keep recording.
+        assert_eq!(g.on_tick(t0 + Duration::from_millis(800)), None);
+        // A real release still stops it normally.
+        assert_eq!(
+            g.on_key(KeyEventKind::Release, t0 + Duration::from_millis(850)),
+            Some(GestureAction::StopPushToTalk)
+        );
+    }
+
+    #[test]
+    fn dropped_release_double_press_toggles_live() {
+        // Kitty mode in a terminal multiplexer (tmux/screen) that forwards Press
+        // and Repeat but drops Release. The two quick taps of a double-press have
+        // their key-ups swallowed, so `down` never clears. The second tap must
+        // still be read as a fresh press and toggle live — otherwise it's
+        // swallowed and the first tap is mistaken for a stuck push-to-talk (the
+        // tmux "live won't start / won't stop / won't transcribe" bug).
+        let mut g = GestureState::new(binding(), true);
+        let t0 = Instant::now();
+        // First tap — its Release never arrives, so the key looks held.
+        assert_eq!(g.on_key(KeyEventKind::Press, t0), None);
+        // Second tap soon after, still no Release nor Repeat seen for the first.
+        assert_eq!(
+            g.on_key(KeyEventKind::Press, t0 + Duration::from_millis(180)),
+            Some(GestureAction::ToggleLive)
+        );
+    }
+
+    #[test]
+    fn press_during_active_hold_is_ignored() {
+        // While a key is genuinely held (push-to-talk, auto-repeats streaming), a
+        // stray Press must NOT be mistaken for a missed-release tap and toggle
+        // live — only the repeat-gap safety net ends a real hold.
+        let mut g = GestureState::new(binding(), true);
+        let t0 = Instant::now();
+        g.on_key(KeyEventKind::Press, t0);
+        assert_eq!(
+            g.on_tick(t0 + Duration::from_millis(300)),
+            Some(GestureAction::StartPushToTalk)
+        );
+        g.on_key(KeyEventKind::Repeat, t0 + Duration::from_millis(350));
+        assert_eq!(
+            g.on_key(KeyEventKind::Press, t0 + Duration::from_millis(360)),
+            None
         );
     }
 

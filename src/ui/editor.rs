@@ -51,7 +51,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 Style::default()
                     .add_modifier(Modifier::BOLD)
                     .bg(theme.title_bg)
-                    .fg(theme.star),
+                    .fg(Color::Rgb(127, 0, 255)),
             ),
             Span::styled(format!("{title} "), title_style),
         ])
@@ -350,7 +350,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let hint = app
         .cfg
         .show_shortcuts
-        .then_some(" Ctrl+R refine · Ctrl+E ∑ · ⌥\\ help ");
+        .then_some(" ^R refine · ^T title · ^H help ");
 
     // Right indicator: a red, animated "listening" cue (mirroring the refine
     // spinner) takes priority over the refine status while dictation is active.
@@ -373,10 +373,12 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let right = right.as_ref().map(|(t, c)| (t.as_str(), *c));
 
     // Left: a transient message (the "Dictation ready" flash, dictation errors,
-    // save notices) wins; while the model loads, show that; otherwise the hint.
-    // No keypress instructions here.
+    // save notices) wins; while the model loads/downloads, show that; otherwise
+    // the hint.
     let left = if !app.status.is_empty() {
         app.status.clone()
+    } else if app.dictation_status() == DictationStatus::Preparing {
+        format!("{} Preparing dictation for first use…", app.spinner())
     } else if app.dictation_status() == DictationStatus::Loading {
         "⏳ Loading speech model…".to_string()
     } else {

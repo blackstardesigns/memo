@@ -24,7 +24,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let accent = app.theme.accent;
     let border = app.theme.border;
     let folder_color = app.theme.refined;
-    let star = app.theme.star;
+    let star = ratatui::style::Color::Rgb(127, 0, 255);
 
     let focused = matches!(app.focus, Focus::Drawer);
     let block = Block::default()

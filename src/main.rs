@@ -4,8 +4,8 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use crossterm::event::{
-    self, Event, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -29,6 +29,7 @@ mod storage;
 mod testutil;
 mod theme;
 mod ui;
+mod update;
 
 use app::App;
 use config::Config;
@@ -59,6 +60,15 @@ enum Commands {
         #[arg(long)]
         edit: bool,
     },
+    /// Update memo to the latest release.
+    Update {
+        /// Include pre-releases (rc / alpha / beta), not just stable versions.
+        #[arg(long)]
+        pre: bool,
+        /// Only check whether an update is available; don't install it.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -68,6 +78,7 @@ fn main() -> Result<()> {
     }
     match cli.command {
         Some(Commands::Config { path, edit }) => run_config(path, edit),
+        Some(Commands::Update { pre, check }) => update::run(pre, check),
         None => run_tui(),
     }
 }
@@ -135,7 +146,7 @@ fn run_tui() -> Result<()> {
 fn setup_terminal() -> Result<(Terminal<CrosstermBackend<Stdout>>, bool)> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let release_seed = supports_keyboard_enhancement().unwrap_or(false);
     // Only REPORT_EVENT_TYPES — enough to distinguish Press/Repeat/Release without
     // REPORT_ALL_KEYS_AS_ESCAPE_CODES, which would change how existing keys
@@ -152,6 +163,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     // Pop unconditionally — we always push; popping when nothing was pushed (or on
     // a terminal that ignored the push) is a harmless no-op.
     let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    let _ = execute!(terminal.backend_mut(), DisableBracketedPaste);
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
@@ -163,6 +175,7 @@ fn set_panic_hook() {
     let original = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+        let _ = execute!(io::stdout(), DisableBracketedPaste);
         let _ = disable_raw_mode();
         let _ = execute!(io::stdout(), LeaveAlternateScreen);
         original(info);
@@ -187,14 +200,20 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         }
         terminal.draw(|f| ui::draw(f, app))?;
         if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if debug_keys {
-                    log_key_event(&key);
+            match event::read()? {
+                Event::Key(key) => {
+                    if debug_keys {
+                        log_key_event(&key);
+                    }
+                    // Forward every kind (Press/Repeat/Release). on_key_event routes
+                    // the dictation key to the gesture recognizer and everything else
+                    // through the normal Press/Repeat dispatch.
+                    app.on_key_event(key);
                 }
-                // Forward every kind (Press/Repeat/Release). on_key_event routes
-                // the dictation key to the gesture recognizer and everything else
-                // through the normal Press/Repeat dispatch.
-                app.on_key_event(key);
+                // A clipboard paste (bracketed paste) arrives as one event with the
+                // full text — insert it directly so multi-line pastes are instant.
+                Event::Paste(text) => app.on_paste(text),
+                _ => {}
             }
         }
         app.on_tick();
@@ -317,9 +336,7 @@ mod smoke {
     fn ctrl(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
     }
-    fn alt(c: char) -> KeyEvent {
-        KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT)
-    }
+
     fn code(k: KeyCode) -> KeyEvent {
         KeyEvent::new(k, KeyModifiers::NONE)
     }
@@ -334,7 +351,7 @@ mod smoke {
         let mut app = test_app();
         render(&mut app); // empty list
 
-        app.on_key(alt('\\')); // help modal (Alt+\)
+        app.on_key(ctrl('h')); // help modal (Ctrl+H)
         render(&mut app);
         app.on_key(code(KeyCode::Esc)); // close help
 
@@ -611,8 +628,8 @@ mod smoke {
         app.on_key(code(KeyCode::Esc));
         assert_eq!(app.notes.len(), 2);
 
-        // h opens the drawer and focuses it. Tree: [Folder Work] [loose note].
-        app.on_key(key('h'));
+        // d opens the drawer and focuses it. Tree: [Folder Work] [loose note].
+        app.on_key(key('d'));
         assert!(app.drawer_open);
         render(&mut app);
 
@@ -636,17 +653,85 @@ mod smoke {
         typed(&mut app, "note one");
         app.on_key(code(KeyCode::Esc));
 
-        // On the home screen, h opens and closes the drawer.
-        app.on_key(key('h'));
+        // On the home screen, d opens and closes the drawer.
+        app.on_key(key('d'));
         assert!(app.drawer_open);
-        app.on_key(key('h')); // drawer focused -> h on a leaf closes it
+        app.on_key(key('d')); // drawer focused -> d on a leaf closes it
         assert!(!app.drawer_open);
 
-        // In the editor, h is ordinary typed text, not a toggle.
+        // In the editor, d is ordinary typed text, not a toggle.
         app.on_key(code(KeyCode::Enter)); // open the note
         let before = app.drawer_open;
-        app.on_key(key('h'));
+        app.on_key(key('d'));
         assert_eq!(app.drawer_open, before);
-        assert!(app.textarea.lines().join("\n").contains('h'));
+        assert!(app.textarea.lines().join("\n").contains('d'));
+    }
+
+    #[test]
+    fn new_note_works_while_drawer_is_open() {
+        let mut app = test_app();
+        app.on_key(key('n'));
+        typed(&mut app, "first");
+        app.on_key(code(KeyCode::Esc));
+        assert_eq!(app.notes.len(), 1);
+
+        // Open and focus the drawer.
+        app.on_key(key('d'));
+        assert!(app.drawer_open);
+        assert!(matches!(app.focus, Focus::Drawer));
+
+        // `n` must still create a new note (and enter the editor) with the drawer
+        // focused — global commands aren't swallowed by the drawer.
+        app.on_key(key('n'));
+        assert!(
+            matches!(app.screen, crate::app::Screen::Editor),
+            "n should open the editor even with the drawer focused"
+        );
+        assert!(app.editing.is_some());
+        typed(&mut app, "from the drawer");
+        app.on_key(code(KeyCode::Esc));
+        assert_eq!(app.notes.len(), 2, "a second note was created from the drawer");
+    }
+
+    #[test]
+    fn paste_inserts_multiline_text_into_the_note() {
+        let mut app = test_app();
+        app.on_key(key('n')); // new note -> editor
+        app.on_paste("line one\nline two".to_string());
+        assert_eq!(app.textarea.lines().join("\n"), "line one\nline two");
+    }
+
+    #[test]
+    fn paste_normalizes_crlf_in_the_note() {
+        // A CRLF paste is normalized — no stray carriage returns end up in the note.
+        let mut app = test_app();
+        app.on_key(key('n'));
+        app.on_paste("a\r\nb".to_string());
+        assert_eq!(app.textarea.lines().join("\n"), "a\nb");
+    }
+
+    #[test]
+    fn paste_into_search_filters_notes() {
+        let mut app = test_app();
+        for body in ["alpha", "beta"] {
+            app.on_key(key('n'));
+            typed(&mut app, body);
+            app.on_key(code(KeyCode::Esc));
+        }
+        app.on_key(key('/')); // focus the search bar
+        app.on_paste("alph".to_string());
+        assert_eq!(app.search_query, "alph");
+        assert_eq!(app.items.len(), 1, "paste into search filters to the match");
+    }
+
+    #[test]
+    fn paste_into_title_modal_is_flattened_to_one_line() {
+        let mut app = test_app();
+        app.on_key(key('n'));
+        app.on_key(ctrl('t')); // title-edit modal (prefilled)
+        clear_input(&mut app); // clear the prefilled default
+        app.on_paste("New\nMulti\nLine".to_string());
+        app.on_key(code(KeyCode::Enter)); // commit the title
+        assert_eq!(app.editing.as_ref().unwrap().meta.title, "New Multi Line");
     }
 }

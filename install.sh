@@ -41,12 +41,13 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
   RESET="${ESC}[0m"; BOLD="${ESC}[1m"; DIM="${ESC}[2m"
   RED="${ESC}[31m"; GREEN="${ESC}[32m"; YELLOW="${ESC}[33m"
   BLUE="${ESC}[34m"; MAGENTA="${ESC}[35m"; CYAN="${ESC}[36m"
-  # Cyan → blue gradient for the banner (256-color).
-  G1="${ESC}[38;5;51m"; G2="${ESC}[38;5;45m"; G3="${ESC}[38;5;39m"
-  G4="${ESC}[38;5;33m"; G5="${ESC}[38;5;27m"; G6="${ESC}[38;5;21m"
+  VIOLET="${ESC}[38;5;93m"
+  # Yellow → orange gradient for the banner (256-color).
+  G1="${ESC}[38;5;226m"; G2="${ESC}[38;5;220m"; G3="${ESC}[38;5;214m"
+  G4="${ESC}[38;5;208m"; G5="${ESC}[38;5;202m"; G6="${ESC}[38;5;166m"
 else
   RESET=""; BOLD=""; DIM=""
-  RED=""; GREEN=""; YELLOW=""; BLUE=""; MAGENTA=""; CYAN=""
+  RED=""; GREEN=""; YELLOW=""; BLUE=""; MAGENTA=""; CYAN=""; VIOLET=""
   G1=""; G2=""; G3=""; G4=""; G5=""; G6=""
 fi
 
@@ -55,9 +56,9 @@ HBAR=""; _i=0
 while [ "$_i" -lt 48 ]; do HBAR="${HBAR}─"; _i=$((_i + 1)); done
 
 # ── helpers ──────────────────────────────────────────────────────────────────
-info() { printf ' %s›%s %s\n' "$CYAN" "$RESET" "$1"; }
+info() { printf ' %s›%s %s\n' "$VIOLET" "$RESET" "$1"; }
 warn() { printf ' %s▲%s %s\n' "$YELLOW" "$RESET" "$1" >&2; }
-ok()   { printf ' %s✔%s %s\n' "$GREEN" "$RESET" "$1"; }
+ok()   { printf ' %s✔%s %s\n' "$VIOLET" "$RESET" "$1"; }
 die()  { printf ' %s✖ %s%s\n' "${RED}${BOLD}" "$1" "$RESET" >&2; exit 1; }
 
 banner() {
@@ -78,7 +79,7 @@ banner() {
 # Usage: spin "message" command [args...]
 spin() {
   _msg="$1"; shift
-  if [ -z "$CYAN" ] || [ ! -t 1 ]; then
+  if [ -z "$VIOLET" ] || [ ! -t 1 ]; then
     info "$_msg"
     "$@"
     return $?
@@ -88,14 +89,14 @@ spin() {
   _pid=$!
   while kill -0 "$_pid" 2>/dev/null; do
     for _f in ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏; do
-      printf '\r %s%s%s %s ' "$CYAN" "$_f" "$RESET" "$_msg"
+      printf '\r %s%s%s %s ' "$VIOLET" "$_f" "$RESET" "$_msg"
       kill -0 "$_pid" 2>/dev/null || break
       sleep 0.1 2>/dev/null || sleep 1
     done
   done
   if wait "$_pid"; then _rc=0; else _rc=$?; fi
   if [ "$_rc" -eq 0 ]; then
-    printf '\r %s✔%s %s \n' "$GREEN" "$RESET" "$_msg"
+    printf '\r %s✔%s %s \n' "$VIOLET" "$RESET" "$_msg"
   else
     printf '\r %s✖%s %s \n' "$RED" "$RESET" "$_msg"
     [ -s "$_log" ] && tail -n 6 "$_log" | sed 's/^/     /' >&2
@@ -294,7 +295,7 @@ try_download_prebuilt() {
   [ -n "$TARGET" ] || return 1
   command -v curl >/dev/null 2>&1 || { warn "curl not found — cannot download prebuilt binary"; return 1; }
 
-  info "Checking for latest release..."
+  # (check runs silently; the download step shows the spinner)
   if [ "$INSTALL_PRERELEASE" = "1" ]; then
     # /releases returns all releases including pre-releases, newest first.
     _all="$(_curl -fsSL "${GITHUB_API}/releases" 2>/dev/null)" || true
@@ -373,7 +374,6 @@ except Exception:
         ACTUAL="$EXPECTED"
       fi
       [ "$ACTUAL" = "$EXPECTED" ] || die "Checksum mismatch for $TARBALL. Aborting."
-      ok "Checksum verified."
     fi
   else
     warn "SHA256SUMS not available — skipping checksum verification"
@@ -396,41 +396,34 @@ build_from_source() {
     ./install.sh"
   fi
 
-  info "No prebuilt binary for $OS/$ARCH — building from source..."
-
   # Ensure Rust / cargo.
   if ! command -v cargo >/dev/null 2>&1 && [ -f "$HOME/.cargo/env" ]; then
     . "$HOME/.cargo/env"
   fi
   if ! command -v cargo >/dev/null 2>&1; then
-    info "Installing Rust via rustup..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    spin "Installing Rust" sh -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
     . "$HOME/.cargo/env"
   fi
-  info "Using $(cargo --version)"
 
   # Ensure build prerequisites for whisper.cpp (compiled via CMake at build time).
   if ! command -v cc >/dev/null 2>&1 && ! command -v clang >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
-    info "C/C++ compiler not found — installing build tools (needed for speech-to-text engine)..."
     case "$OS" in
       Darwin)
         die "No C/C++ compiler found. Run: xcode-select --install, then re-run ./install.sh."
         ;;
       *)
-        _pkg_install build-essential "gcc gcc-c++ make" base-devel build-base || true
+        spin "Installing build tools" sh -c "_pkg_install build-essential 'gcc gcc-c++ make' base-devel build-base" || true
         ;;
     esac
     if ! command -v cc >/dev/null 2>&1 && ! command -v clang >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
       die "No C/C++ compiler found. Install build-essential (or equivalent), then re-run ./install.sh."
     fi
-    ok "Build tools installed."
   fi
   if ! command -v cmake >/dev/null 2>&1; then
-    info "cmake not found — installing it (needed for speech-to-text engine)..."
     if [ "$OS" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
-      brew install cmake || true
+      spin "Installing cmake" brew install cmake || true
     else
-      _pkg_install cmake cmake cmake cmake || true
+      spin "Installing cmake" sh -c "_pkg_install cmake cmake cmake cmake" || true
     fi
     if ! command -v cmake >/dev/null 2>&1; then
       case "$OS" in
@@ -438,30 +431,35 @@ build_from_source() {
         *)      die "cmake not found. Install cmake with your package manager, then re-run ./install.sh." ;;
       esac
     fi
-    ok "cmake installed."
   fi
 
-  info "Building memo (first build compiles whisper.cpp and may take a few minutes)..."
-  cargo install --path "$SCRIPT_DIR" --locked --force
+  spin "Building memo from source (first build may take a few minutes)" \
+    cargo install --path "$SCRIPT_DIR" --locked --force
 
   INSTALL_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
 }
 
 # ── install summary box ───────────────────────────────────────────────────────
-_boxline() { printf '   %s│%s %-46s %s│%s\n' "$GREEN" "$RESET" "$1" "$GREEN" "$RESET"; }
+_boxline() { printf '   %s│%s %-46s %s│%s\n' "$YELLOW" "$RESET" "$1" "$YELLOW" "$RESET"; }
 print_summary() {
   _ver="${VERSION:-}"
   [ -n "$_ver" ] && _ver=" $_ver"
   printf '\n'
-  printf '   %s╭%s╮%s\n' "$GREEN" "$HBAR" "$RESET"
+  printf '   %s╭%s╮%s\n' "$YELLOW" "$HBAR" "$RESET"
   _boxline "memo${_ver} is installed and ready."
   _boxline ""
-  _boxline "launch       memo"
-  _boxline "new note     press  n"
-  _boxline "AI refine    press  Ctrl+R"
-  _boxline "dictation    hold  F5"
-  _boxline "help / keys  Option/Alt + \\"
-  printf '   %s╰%s╯%s\n' "$GREEN" "$HBAR" "$RESET"
+  _boxline "launch          memo"
+  _boxline "new note        n"
+  _boxline "open note       o  or  Enter"
+  _boxline "search          /"
+  _boxline "AI refine       Ctrl+R"
+  _boxline "custom prompt   Ctrl+P"
+  _boxline "save            Ctrl+S"
+  _boxline "edit title      Ctrl+T"
+  _boxline "toggle refined  Tab"
+  _boxline "dictation       hold  F5  (double-press: live)"
+  _boxline "help / keys     Ctrl+H"
+  printf '   %s╰%s╯%s\n' "$YELLOW" "$HBAR" "$RESET"
   printf '\n'
 }
 
@@ -601,7 +599,7 @@ radio_select() {
     _i=1
     for _lab in "$@"; do
       if [ "$_i" = "$_cur" ]; then
-        printf '\r%s[K   %s◉ %s%s\n' "$_esc" "${BOLD}${CYAN}" "$_lab" "$RESET" >/dev/tty
+        printf '\r%s[K   %s◉%s %s%s%s\n' "$_esc" "${BOLD}${VIOLET}" "$RESET" "${BOLD}${YELLOW}" "$_lab" "$RESET" >/dev/tty
       else
         printf '\r%s[K   %s○ %s%s\n' "$_esc" "$DIM" "$_lab" "$RESET" >/dev/tty
       fi

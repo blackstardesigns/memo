@@ -52,7 +52,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Modal::ConfirmQuit => draw_box(
             f,
             " Quit note? ",
-            "Your notes are saved.\n\n[y] yes     [n] no",
+            "[y] yes     [n] no",
             Color::Red,
         ),
     }
@@ -123,7 +123,7 @@ fn draw_custom_prompt(f: &mut Frame, app: &App, buf: &str) {
         Paragraph::new(Line::from(vec![
             Span::styled(
                 " ✦ ",
-                Style::default().fg(theme.star).add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Rgb(127, 0, 255)).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 "custom refine prompt",
@@ -196,7 +196,7 @@ fn draw_title_edit(f: &mut Frame, app: &App, buf: &str, cursor: usize) {
         Paragraph::new(Line::from(vec![
             Span::styled(
                 " ✦ ",
-                Style::default().fg(theme.star).add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Rgb(127, 0, 255)).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 "edit title",
@@ -432,11 +432,16 @@ fn draw_help(f: &mut Frame, app: &App) {
         .split(inner);
 
     // Header
+    let version_str = format!("v{} ", env!("CARGO_PKG_VERSION"));
+    let left_visual_len = 7u16; // " ✦ help"
+    let padding = inner
+        .width
+        .saturating_sub(left_visual_len + version_str.len() as u16);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
                 " ✦ ",
-                Style::default().fg(theme.star).add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Rgb(127, 0, 255)).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 "help",
@@ -444,6 +449,8 @@ fn draw_help(f: &mut Frame, app: &App) {
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             ),
+            Span::raw(" ".repeat(padding as usize)),
+            Span::styled(version_str, Style::default().fg(theme.border)),
         ])),
         chunks[0],
     );
@@ -486,19 +493,20 @@ fn draw_help(f: &mut Frame, app: &App) {
         bind("m", "move note to a folder"),
         bind("/", "search"),
         bind("↑ ↓ ← →", "move selection"),
-        bind("d", "delete note or folder"),
-        bind("x", "export to .md"),
-        bind("h", "toggle drawer"),
+        bind("x", "delete note or folder"),
+        bind("Ctrl+E", "export to .md"),
+        bind("d", "toggle drawer"),
+        bind("Ctrl+H", "help"),
         bind("q / Esc", "quit"),
         Line::raw(""),
         head("Editor"),
         bind("Ctrl+R", "refine with AI"),
         bind("Ctrl+P", "refine with custom prompt"),
-        bind("Ctrl+E", "insert math symbol (∑ picker)"),
+        bind("Ctrl+M", "insert math symbol (∑ picker)"),
         bind("Tab", "toggle original / refined"),
         bind("Ctrl+T", "edit title"),
-        bind("Ctrl+X", "export to .md"),
-        bind("⌥\\", "help"),
+        bind("Ctrl+E", "export to .md"),
+        bind("Ctrl+H", "help"),
         bind("Esc", "save & return to list"),
         Line::raw(""),
         head("Drawer"),
@@ -506,7 +514,7 @@ fn draw_help(f: &mut Frame, app: &App) {
         bind("→ ←", "expand / collapse folder"),
         bind("Enter", "open note or toggle folder"),
         bind("Tab", "back to tiles"),
-        bind("h / Esc", "close drawer"),
+        bind("d / Esc", "close drawer"),
     ]);
 
     f.render_widget(Paragraph::new(lines), chunks[2]);
